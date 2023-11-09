@@ -226,6 +226,7 @@ class StableDiffusionXLPipeline(
         prompt: str,
         prompt_2: Optional[str] = None,
         device: Optional[torch.device] = None,
+        cfg_end: Optional[int] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[str] = None,
@@ -280,6 +281,7 @@ class StableDiffusionXLPipeline(
                 the output of the pre-final layer will be used for computing the prompt embeddings.
         """
         device = device or self._execution_device
+        cfg_end = cfg_end
 
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
@@ -678,6 +680,7 @@ class StableDiffusionXLPipeline(
         num_inference_steps: int = 50,
         denoising_end: Optional[float] = None,
         guidance_scale: float = 5.0,
+        cfg_end: Optional[int] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_2: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
@@ -905,6 +908,7 @@ class StableDiffusionXLPipeline(
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
+            cfg_end=cfg_end,
             negative_prompt=negative_prompt,
             negative_prompt_2=negative_prompt_2,
             prompt_embeds=prompt_embeds,
@@ -992,6 +996,12 @@ class StableDiffusionXLPipeline(
         self._num_timesteps = len(timesteps)
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                if cfg_end is not None and i < cfg_end and self.do_classifier_free_guidance:
+                    self.do_classifier_free_guidance = False
+                    prompt_embeds = torch.chunk(prompt_embeds, 2, dim=0)[-1]
+                    add_text_embeds = torch.chunk(add_text_embeds, 2, dim=0)[-1]
+                    add_time_ids = torch.chunk(add_time_ids, 2, dim=0)[-1]
+
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
