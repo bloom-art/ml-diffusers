@@ -1259,8 +1259,6 @@ class StableDiffusionXLPipeline(
         self._num_timesteps = len(timesteps)
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                end_cfg = 0.1
-                percent = i / num_inference_steps
                 if (
                     end_cfg is not None
                     and i / num_inference_steps > end_cfg
