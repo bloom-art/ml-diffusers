@@ -17,12 +17,12 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import PIL.Image
 import torch
 import torch.nn.functional as F
-
-import PIL.Image
-from diffusers.utils.import_utils import is_invisible_watermark_available
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
+
+from diffusers.utils.import_utils import is_invisible_watermark_available
 
 from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import StableDiffusionXLLoraLoaderMixin, TextualInversionLoaderMixin
@@ -327,6 +327,7 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
                 the output of the pre-final layer will be used for computing the prompt embeddings.
         """
         device = device or self._execution_device
+        cfg_end = cfg_end
 
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
@@ -386,7 +387,8 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
                 ):
                     removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1 : -1])
                     logger.warning(
-                        "The following part of your input was truncated because CLIP can only handle sequences up to"
+                        "The following part of your input was truncated"
+                        " because CLIP can only handle sequences up to"
                         f" {tokenizer.model_max_length} tokens: {removed_text}"
                     )
 
@@ -422,14 +424,15 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
             uncond_tokens: List[str]
             if prompt is not None and type(prompt) is not type(negative_prompt):
                 raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
+                    "`negative_prompt` should be the same type to `prompt`,"
+                    f" but got {type(negative_prompt)} != {type(prompt)}."
                 )
             elif batch_size != len(negative_prompt):
                 raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
+                    f"`negative_prompt`: {negative_prompt} has batch size"
+                    f" {len(negative_prompt)}, but `prompt`: {prompt} has"
+                    f" batch size {batch_size}. Please make sure that passed"
+                    " `negative_prompt` matches the batch size of `prompt`."
                 )
             else:
                 uncond_tokens = [negative_prompt, negative_prompt_2]
@@ -500,7 +503,12 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
                 # Retrieve the original scale by scaling back the LoRA layers
                 unscale_lora_layers(self.text_encoder_2, lora_scale)
 
-        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+        return (
+            prompt_embeds,
+            negative_prompt_embeds,
+            pooled_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        )
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):

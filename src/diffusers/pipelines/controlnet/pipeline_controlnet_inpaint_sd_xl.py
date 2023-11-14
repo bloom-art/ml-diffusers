@@ -16,10 +16,9 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import PIL.Image
 import torch
 import torch.nn.functional as F
-
-import PIL.Image
 from transformers import (
     CLIPTextModel,
     CLIPTextModelWithProjection,
@@ -331,6 +330,7 @@ class StableDiffusionXLControlNetInpaintPipeline(
                 the output of the pre-final layer will be used for computing the prompt embeddings.
         """
         device = device or self._execution_device
+        cfg_end = cfg_end
 
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
