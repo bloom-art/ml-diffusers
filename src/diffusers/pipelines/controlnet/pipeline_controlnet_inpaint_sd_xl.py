@@ -16,13 +16,22 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import PIL.Image
 import torch
 import torch.nn.functional as F
-from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
+
+import PIL.Image
+from transformers import (
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    CLIPTokenizer,
+)
 
 from ...image_processor import PipelineImageInput, VaeImageProcessor
-from ...loaders import FromSingleFileMixin, StableDiffusionXLLoraLoaderMixin, TextualInversionLoaderMixin
+from ...loaders import (
+    FromSingleFileMixin,
+    StableDiffusionXLLoraLoaderMixin,
+    TextualInversionLoaderMixin,
+)
 from ...models import AutoencoderKL, ControlNetModel, UNet2DConditionModel
 from ...models.attention_processor import (
     AttnProcessor2_0,
@@ -42,12 +51,16 @@ from ...utils import (
 )
 from ...utils.torch_utils import is_compiled_module, randn_tensor
 from ..pipeline_utils import DiffusionPipeline
-from ..stable_diffusion_xl.pipeline_output import StableDiffusionXLPipelineOutput
+from ..stable_diffusion_xl.pipeline_output import (
+    StableDiffusionXLPipelineOutput,
+)
 from .multicontrolnet import MultiControlNetModel
 
 
 if is_invisible_watermark_available():
-    from diffusers.pipelines.stable_diffusion_xl.watermark import StableDiffusionXLWatermarker
+    from diffusers.pipelines.stable_diffusion_xl.watermark import (
+        StableDiffusionXLWatermarker,
+    )
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -165,7 +178,12 @@ class StableDiffusionXLControlNetInpaintPipeline(
             [`DDIMScheduler`], [`LMSDiscreteScheduler`], or [`PNDMScheduler`].
     """
     model_cpu_offload_seq = "text_encoder->text_encoder_2->unet->vae"
-    _optional_components = ["tokenizer", "tokenizer_2", "text_encoder", "text_encoder_2"]
+    _optional_components = [
+        "tokenizer",
+        "tokenizer_2",
+        "text_encoder",
+        "text_encoder_2",
+    ]
 
     def __init__(
         self,
@@ -201,10 +219,15 @@ class StableDiffusionXLControlNetInpaintPipeline(
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.mask_processor = VaeImageProcessor(
-            vae_scale_factor=self.vae_scale_factor, do_normalize=False, do_binarize=True, do_convert_grayscale=True
+            vae_scale_factor=self.vae_scale_factor,
+            do_normalize=False,
+            do_binarize=True,
+            do_convert_grayscale=True,
         )
         self.control_image_processor = VaeImageProcessor(
-            vae_scale_factor=self.vae_scale_factor, do_convert_rgb=True, do_normalize=False
+            vae_scale_factor=self.vae_scale_factor,
+            do_convert_rgb=True,
+            do_normalize=False,
         )
 
         add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
@@ -253,6 +276,7 @@ class StableDiffusionXLControlNetInpaintPipeline(
         prompt: str,
         prompt_2: Optional[str] = None,
         device: Optional[torch.device] = None,
+        cfg_end: Optional[int] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[str] = None,
@@ -366,7 +390,8 @@ class StableDiffusionXLControlNetInpaintPipeline(
                 ):
                     removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1 : -1])
                     logger.warning(
-                        "The following part of your input was truncated because CLIP can only handle sequences up to"
+                        "The following part of your input was truncated"
+                        " because CLIP can only handle sequences up to"
                         f" {tokenizer.model_max_length} tokens: {removed_text}"
                     )
 
@@ -402,14 +427,15 @@ class StableDiffusionXLControlNetInpaintPipeline(
             uncond_tokens: List[str]
             if prompt is not None and type(prompt) is not type(negative_prompt):
                 raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
+                    "`negative_prompt` should be the same type to `prompt`,"
+                    f" but got {type(negative_prompt)} != {type(prompt)}."
                 )
             elif batch_size != len(negative_prompt):
                 raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
+                    f"`negative_prompt`: {negative_prompt} has batch size"
+                    f" {len(negative_prompt)}, but `prompt`: {prompt} has"
+                    f" batch size {batch_size}. Please make sure that passed"
+                    " `negative_prompt` matches the batch size of `prompt`."
                 )
             else:
                 uncond_tokens = [negative_prompt, negative_prompt_2]
@@ -480,7 +506,12 @@ class StableDiffusionXLControlNetInpaintPipeline(
                 # Retrieve the original scale by scaling back the LoRA layers
                 unscale_lora_layers(self.text_encoder_2, lora_scale)
 
-        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+        return (
+            prompt_embeds,
+            negative_prompt_embeds,
+            pooled_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        )
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -517,7 +548,9 @@ class StableDiffusionXLControlNetInpaintPipeline(
             and not image_is_np_list
         ):
             raise TypeError(
-                f"image must be passed and be one of PIL image, numpy array, torch tensor, list of PIL images, list of numpy arrays or list of torch tensors, but is {type(image)}"
+                "image must be passed and be one of PIL image, numpy array,"
+                " torch tensor, list of PIL images, list of numpy arrays or"
+                f" list of torch tensors, but is {type(image)}"
             )
 
         if image_is_pil:
@@ -534,7 +567,9 @@ class StableDiffusionXLControlNetInpaintPipeline(
 
         if image_batch_size != 1 and image_batch_size != prompt_batch_size:
             raise ValueError(
-                f"If image batch size is not 1, image batch size must be same as prompt batch size. image batch size: {image_batch_size}, prompt batch size: {prompt_batch_size}"
+                "If image batch size is not 1, image batch size must be same"
+                f" as prompt batch size. image batch size: {image_batch_size},"
+                f" prompt batch size: {prompt_batch_size}"
             )
 
     def check_inputs(
@@ -561,63 +596,78 @@ class StableDiffusionXLControlNetInpaintPipeline(
             raise ValueError("`num_inference_steps` cannot be None.")
         elif not isinstance(num_inference_steps, int) or num_inference_steps <= 0:
             raise ValueError(
-                f"`num_inference_steps` has to be a positive integer but is {num_inference_steps} of type"
-                f" {type(num_inference_steps)}."
+                "`num_inference_steps` has to be a positive integer but is"
+                f" {num_inference_steps} of type {type(num_inference_steps)}."
             )
         if (callback_steps is None) or (
             callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0)
         ):
             raise ValueError(
-                f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
-                f" {type(callback_steps)}."
+                "`callback_steps` has to be a positive integer but is"
+                f" {callback_steps} of type {type(callback_steps)}."
             )
 
         if prompt is not None and prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
+                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`:"
+                f" {prompt_embeds}. Please make sure to only forward one of"
+                " the two."
             )
         elif prompt_2 is not None and prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `prompt_2`: {prompt_2} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
+                f"Cannot forward both `prompt_2`: {prompt_2} and"
+                f" `prompt_embeds`: {prompt_embeds}. Please make sure to only"
+                " forward one of the two."
             )
         elif prompt is None and prompt_embeds is None:
             raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
+                "Provide either `prompt` or `prompt_embeds`. Cannot leave both"
+                " `prompt` and `prompt_embeds` undefined."
             )
         elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+            raise ValueError("`prompt` has to be of type `str` or `list` but is" f" {type(prompt)}")
         elif prompt_2 is not None and (not isinstance(prompt_2, str) and not isinstance(prompt_2, list)):
-            raise ValueError(f"`prompt_2` has to be of type `str` or `list` but is {type(prompt_2)}")
+            raise ValueError("`prompt_2` has to be of type `str` or `list` but is" f" {type(prompt_2)}")
 
         if negative_prompt is not None and negative_prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+                f"Cannot forward both `negative_prompt`: {negative_prompt} and"
+                f" `negative_prompt_embeds`: {negative_prompt_embeds}. Please"
+                " make sure to only forward one of the two."
             )
         elif negative_prompt_2 is not None and negative_prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `negative_prompt_2`: {negative_prompt_2} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+                "Cannot forward both `negative_prompt_2`:"
+                f" {negative_prompt_2} and `negative_prompt_embeds`:"
+                f" {negative_prompt_embeds}. Please make sure to only forward"
+                " one of the two."
             )
 
         if prompt_embeds is not None and negative_prompt_embeds is not None:
             if prompt_embeds.shape != negative_prompt_embeds.shape:
                 raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
+                    "`prompt_embeds` and `negative_prompt_embeds` must have"
+                    " the same shape when passed directly, but got:"
+                    f" `prompt_embeds` {prompt_embeds.shape} !="
+                    " `negative_prompt_embeds`"
                     f" {negative_prompt_embeds.shape}."
                 )
 
         if prompt_embeds is not None and pooled_prompt_embeds is None:
             raise ValueError(
-                "If `prompt_embeds` are provided, `pooled_prompt_embeds` also have to be passed. Make sure to generate `pooled_prompt_embeds` from the same text encoder that was used to generate `prompt_embeds`."
+                "If `prompt_embeds` are provided, `pooled_prompt_embeds` also"
+                " have to be passed. Make sure to generate"
+                " `pooled_prompt_embeds` from the same text encoder that was"
+                " used to generate `prompt_embeds`."
             )
 
         if negative_prompt_embeds is not None and negative_pooled_prompt_embeds is None:
             raise ValueError(
-                "If `negative_prompt_embeds` are provided, `negative_pooled_prompt_embeds` also have to be passed. Make sure to generate `negative_pooled_prompt_embeds` from the same text encoder that was used to generate `negative_prompt_embeds`."
+                "If `negative_prompt_embeds` are provided,"
+                " `negative_pooled_prompt_embeds` also have to be passed. Make"
+                " sure to generate `negative_pooled_prompt_embeds` from the"
+                " same text encoder that was used to generate"
+                " `negative_prompt_embeds`."
             )
 
         # `prompt` needs more sophisticated handling when there are multiple
@@ -625,8 +675,9 @@ class StableDiffusionXLControlNetInpaintPipeline(
         if isinstance(self.controlnet, MultiControlNetModel):
             if isinstance(prompt, list):
                 logger.warning(
-                    f"You have {len(self.controlnet.nets)} ControlNets and you have passed {len(prompt)}"
-                    " prompts. The conditionings will be fixed across the prompts."
+                    f"You have {len(self.controlnet.nets)} ControlNets and you"
+                    f" have passed {len(prompt)} prompts. The conditionings"
+                    " will be fixed across the prompts."
                 )
 
         # Check `image`
@@ -650,10 +701,13 @@ class StableDiffusionXLControlNetInpaintPipeline(
             # When `image` is a nested list:
             # (e.g. [[canny_image_1, pose_image_1], [canny_image_2, pose_image_2]])
             elif any(isinstance(i, list) for i in image):
-                raise ValueError("A single batch of multiple conditionings are supported at the moment.")
+                raise ValueError("A single batch of multiple conditionings are supported at" " the moment.")
             elif len(image) != len(self.controlnet.nets):
                 raise ValueError(
-                    f"For multiple controlnets: `image` must have the same length as the number of controlnets, but got {len(image)} images and {len(self.controlnet.nets)} ControlNets."
+                    "For multiple controlnets: `image` must have the same"
+                    " length as the number of controlnets, but got"
+                    f" {len(image)} images and"
+                    f" {len(self.controlnet.nets)} ControlNets."
                 )
 
             for image_ in image:
@@ -668,7 +722,7 @@ class StableDiffusionXLControlNetInpaintPipeline(
             and isinstance(self.controlnet._orig_mod, ControlNetModel)
         ):
             if not isinstance(controlnet_conditioning_scale, float):
-                raise TypeError("For single controlnet: `controlnet_conditioning_scale` must be type `float`.")
+                raise TypeError("For single controlnet: `controlnet_conditioning_scale`" " must be type `float`.")
         elif (
             isinstance(self.controlnet, MultiControlNetModel)
             or is_compiled
@@ -676,13 +730,15 @@ class StableDiffusionXLControlNetInpaintPipeline(
         ):
             if isinstance(controlnet_conditioning_scale, list):
                 if any(isinstance(i, list) for i in controlnet_conditioning_scale):
-                    raise ValueError("A single batch of multiple conditionings are supported at the moment.")
+                    raise ValueError("A single batch of multiple conditionings are" " supported at the moment.")
             elif isinstance(controlnet_conditioning_scale, list) and len(controlnet_conditioning_scale) != len(
                 self.controlnet.nets
             ):
                 raise ValueError(
-                    "For multiple controlnets: When `controlnet_conditioning_scale` is specified as `list`, it must have"
-                    " the same length as the number of controlnets"
+                    "For multiple controlnets: When"
+                    " `controlnet_conditioning_scale` is specified as `list`,"
+                    " it must have the same length as the number of"
+                    " controlnets"
                 )
         else:
             assert False
@@ -695,19 +751,26 @@ class StableDiffusionXLControlNetInpaintPipeline(
 
         if len(control_guidance_start) != len(control_guidance_end):
             raise ValueError(
-                f"`control_guidance_start` has {len(control_guidance_start)} elements, but `control_guidance_end` has {len(control_guidance_end)} elements. Make sure to provide the same number of elements to each list."
+                "`control_guidance_start` has"
+                f" {len(control_guidance_start)} elements, but"
+                " `control_guidance_end` has"
+                f" {len(control_guidance_end)} elements. Make sure to provide"
+                " the same number of elements to each list."
             )
 
         if isinstance(self.controlnet, MultiControlNetModel):
             if len(control_guidance_start) != len(self.controlnet.nets):
                 raise ValueError(
-                    f"`control_guidance_start`: {control_guidance_start} has {len(control_guidance_start)} elements but there are {len(self.controlnet.nets)} controlnets available. Make sure to provide {len(self.controlnet.nets)}."
+                    f"`control_guidance_start`: {control_guidance_start} has"
+                    f" {len(control_guidance_start)} elements but there are"
+                    f" {len(self.controlnet.nets)} controlnets available. Make"
+                    f" sure to provide {len(self.controlnet.nets)}."
                 )
 
         for start, end in zip(control_guidance_start, control_guidance_end):
             if start >= end:
                 raise ValueError(
-                    f"control guidance start: {start} cannot be larger or equal to control guidance end: {end}."
+                    f"control guidance start: {start} cannot be larger or" f" equal to control guidance end: {end}."
                 )
             if start < 0.0:
                 raise ValueError(f"control guidance start: {start} can't be smaller than 0.")
@@ -761,17 +824,25 @@ class StableDiffusionXLControlNetInpaintPipeline(
         return_noise=False,
         return_image_latents=False,
     ):
-        shape = (batch_size, num_channels_latents, height // self.vae_scale_factor, width // self.vae_scale_factor)
+        shape = (
+            batch_size,
+            num_channels_latents,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
+        )
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                "You have passed a list of generators of length"
+                f" {len(generator)}, but requested an effective batch size of"
+                f" {batch_size}. Make sure the batch size matches the length"
+                " of the generators."
             )
 
         if (image is None or timestep is None) and not is_strength_max:
             raise ValueError(
-                "Since strength < 1. initial latents are to be initialised as a combination of Image + Noise."
-                "However, either the image or the noise timestep has not been provided."
+                "Since strength < 1. initial latents are to be initialised as"
+                " a combination of Image + Noise.However, either the image or"
+                " the noise timestep has not been provided."
             )
 
         if return_image_latents or (latents is None and not is_strength_max):
@@ -830,13 +901,26 @@ class StableDiffusionXLControlNetInpaintPipeline(
         return image_latents
 
     def prepare_mask_latents(
-        self, mask, masked_image, batch_size, height, width, dtype, device, generator, do_classifier_free_guidance
+        self,
+        mask,
+        masked_image,
+        batch_size,
+        height,
+        width,
+        dtype,
+        device,
+        generator,
+        do_classifier_free_guidance,
     ):
         # resize the mask to latents shape as we concatenate the mask to the latents
         # we do that before converting to dtype to avoid breaking in case we're using cpu_offload
         # and half precision
         mask = torch.nn.functional.interpolate(
-            mask, size=(height // self.vae_scale_factor, width // self.vae_scale_factor)
+            mask,
+            size=(
+                height // self.vae_scale_factor,
+                width // self.vae_scale_factor,
+            ),
         )
         mask = mask.to(device=device, dtype=dtype)
 
@@ -844,9 +928,11 @@ class StableDiffusionXLControlNetInpaintPipeline(
         if mask.shape[0] < batch_size:
             if not batch_size % mask.shape[0] == 0:
                 raise ValueError(
-                    "The passed mask and the required batch size don't match. Masks are supposed to be duplicated to"
-                    f" a total batch size of {batch_size}, but {mask.shape[0]} masks were passed. Make sure the number"
-                    " of masks that you pass is divisible by the total requested batch size."
+                    "The passed mask and the required batch size don't match."
+                    " Masks are supposed to be duplicated to a total batch"
+                    f" size of {batch_size}, but {mask.shape[0]} masks were"
+                    " passed. Make sure the number of masks that you pass is"
+                    " divisible by the total requested batch size."
                 )
             mask = mask.repeat(batch_size // mask.shape[0], 1, 1, 1)
 
@@ -859,9 +945,12 @@ class StableDiffusionXLControlNetInpaintPipeline(
             if masked_image_latents.shape[0] < batch_size:
                 if not batch_size % masked_image_latents.shape[0] == 0:
                     raise ValueError(
-                        "The passed images and the required batch size don't match. Images are supposed to be duplicated"
-                        f" to a total batch size of {batch_size}, but {masked_image_latents.shape[0]} images were passed."
-                        " Make sure the number of images that you pass is divisible by the total requested batch size."
+                        "The passed images and the required batch size don't"
+                        " match. Images are supposed to be duplicated to a"
+                        f" total batch size of {batch_size}, but"
+                        f" {masked_image_latents.shape[0]} images were passed."
+                        " Make sure the number of images that you pass is"
+                        " divisible by the total requested batch size."
                     )
                 masked_image_latents = masked_image_latents.repeat(
                     batch_size // masked_image_latents.shape[0], 1, 1, 1
@@ -940,18 +1029,36 @@ class StableDiffusionXLControlNetInpaintPipeline(
             and (expected_add_embed_dim - passed_add_embed_dim) == self.unet.config.addition_time_embed_dim
         ):
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. Please make sure to enable `requires_aesthetics_score` with `pipe.register_to_config(requires_aesthetics_score=True)` to make sure `aesthetic_score` {aesthetic_score} and `negative_aesthetic_score` {negative_aesthetic_score} is correctly used by the model."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. Please make sure to"
+                " enable `requires_aesthetics_score` with"
+                " `pipe.register_to_config(requires_aesthetics_score=True)`"
+                f" to make sure `aesthetic_score` {aesthetic_score} and"
+                f" `negative_aesthetic_score` {negative_aesthetic_score} is"
+                " correctly used by the model."
             )
         elif (
             expected_add_embed_dim < passed_add_embed_dim
             and (passed_add_embed_dim - expected_add_embed_dim) == self.unet.config.addition_time_embed_dim
         ):
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. Please make sure to disable `requires_aesthetics_score` with `pipe.register_to_config(requires_aesthetics_score=False)` to make sure `target_size` {target_size} is correctly used by the model."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. Please make sure to"
+                " disable `requires_aesthetics_score` with"
+                " `pipe.register_to_config(requires_aesthetics_score=False)`"
+                f" to make sure `target_size` {target_size} is correctly used"
+                " by the model."
             )
         elif expected_add_embed_dim != passed_add_embed_dim:
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. The model has an"
+                " incorrect config. Please check"
+                " `unet.config.time_embedding_type` and"
+                " `text_encoder_2.config.projection_dim`."
             )
 
         add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
@@ -1285,13 +1392,18 @@ class StableDiffusionXLControlNetInpaintPipeline(
 
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps, num_inference_steps = self.get_timesteps(
-            num_inference_steps, strength, device, denoising_start=denoising_start if denoising_value_valid else None
+            num_inference_steps,
+            strength,
+            device,
+            denoising_start=denoising_start if denoising_value_valid else None,
         )
         # check that number of inference steps is not < 1 - as this doesn't make sense
         if num_inference_steps < 1:
             raise ValueError(
-                f"After adjusting the num_inference_steps by strength parameter: {strength}, the number of pipeline"
-                f"steps is {num_inference_steps} which is < 1 and not appropriate for this pipeline."
+                "After adjusting the num_inference_steps by strength"
+                f" parameter: {strength}, the number of pipelinesteps is"
+                f" {num_inference_steps} which is < 1 and not appropriate for"
+                " this pipeline."
             )
         # at which timestep to set the initial noise (n.b. 50% if strength is 0.5)
         latent_timestep = timesteps[:1].repeat(batch_size * num_images_per_prompt)
@@ -1392,15 +1504,21 @@ class StableDiffusionXLControlNetInpaintPipeline(
             num_channels_masked_image = masked_image_latents.shape[1]
             if num_channels_latents + num_channels_mask + num_channels_masked_image != self.unet.config.in_channels:
                 raise ValueError(
-                    f"Incorrect configuration settings! The config of `pipeline.unet`: {self.unet.config} expects"
-                    f" {self.unet.config.in_channels} but received `num_channels_latents`: {num_channels_latents} +"
-                    f" `num_channels_mask`: {num_channels_mask} + `num_channels_masked_image`: {num_channels_masked_image}"
-                    f" = {num_channels_latents+num_channels_masked_image+num_channels_mask}. Please verify the config of"
-                    " `pipeline.unet` or your `mask_image` or `image` input."
+                    "Incorrect configuration settings! The config of"
+                    f" `pipeline.unet`: {self.unet.config} expects"
+                    f" {self.unet.config.in_channels} but received"
+                    f" `num_channels_latents`: {num_channels_latents} +"
+                    f" `num_channels_mask`: {num_channels_mask} +"
+                    " `num_channels_masked_image`:"
+                    f" {num_channels_masked_image} ="
+                    f" {num_channels_latents+num_channels_masked_image+num_channels_mask}."
+                    " Please verify the config of `pipeline.unet` or your"
+                    " `mask_image` or `image` input."
                 )
         elif num_channels_unet != 4:
             raise ValueError(
-                f"The unet {self.unet.__class__} should have either 4 or 9 input channels, not {self.unet.config.in_channels}."
+                f"The unet {self.unet.__class__} should have either 4 or 9"
+                f" input channels, not {self.unet.config.in_channels}."
             )
         # 8.1 Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -1464,8 +1582,8 @@ class StableDiffusionXLControlNetInpaintPipeline(
             and denoising_start >= denoising_end
         ):
             raise ValueError(
-                f"`denoising_start`: {denoising_start} cannot be larger than or equal to `denoising_end`: "
-                + f" {denoising_end} when using type float."
+                f"`denoising_start`: {denoising_start} cannot be larger than"
+                " or equal to `denoising_end`: " + f" {denoising_end} when using type float."
             )
         elif denoising_end is not None and denoising_value_valid(denoising_end):
             discrete_timestep_cutoff = int(
@@ -1485,7 +1603,10 @@ class StableDiffusionXLControlNetInpaintPipeline(
                 # concat latents, mask, masked_image_latents in the channel dimension
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                added_cond_kwargs = {
+                    "text_embeds": add_text_embeds,
+                    "time_ids": add_time_ids,
+                }
 
                 # controlnet(s) inference
                 if guess_mode and do_classifier_free_guidance:
@@ -1530,7 +1651,12 @@ class StableDiffusionXLControlNetInpaintPipeline(
                     # To apply the output of ControlNet to both the unconditional and conditional batches,
                     # add 0 to the unconditional batch to keep it unchanged.
                     down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-                    mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+                    mid_block_res_sample = torch.cat(
+                        [
+                            torch.zeros_like(mid_block_res_sample),
+                            mid_block_res_sample,
+                        ]
+                    )
 
                 if num_channels_unet == 9:
                     latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
@@ -1554,10 +1680,20 @@ class StableDiffusionXLControlNetInpaintPipeline(
 
                 if do_classifier_free_guidance and guidance_rescale > 0.0:
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+                    noise_pred = rescale_noise_cfg(
+                        noise_pred,
+                        noise_pred_text,
+                        guidance_rescale=guidance_rescale,
+                    )
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                latents = self.scheduler.step(
+                    noise_pred,
+                    t,
+                    latents,
+                    **extra_step_kwargs,
+                    return_dict=False,
+                )[0]
 
                 if num_channels_unet == 4:
                     init_latents_proper = image_latents
@@ -1569,7 +1705,9 @@ class StableDiffusionXLControlNetInpaintPipeline(
                     if i < len(timesteps) - 1:
                         noise_timestep = timesteps[i + 1]
                         init_latents_proper = self.scheduler.add_noise(
-                            init_latents_proper, noise, torch.tensor([noise_timestep])
+                            init_latents_proper,
+                            noise,
+                            torch.tensor([noise_timestep]),
                         )
 
                     latents = (1 - init_mask) * init_latents_proper + init_mask * latents
