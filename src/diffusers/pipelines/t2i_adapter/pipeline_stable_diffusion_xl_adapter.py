@@ -16,8 +16,9 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import PIL.Image
 import torch
+
+import PIL.Image
 from transformers import (
     CLIPTextModel,
     CLIPTextModelWithProjection,
@@ -103,7 +104,14 @@ def _preprocess_adapter_image(image, height, width):
         image = [image]
 
     if isinstance(image[0], PIL.Image.Image):
-        image = [np.array(i.resize((width, height), resample=PIL_INTERPOLATION["lanczos"])) for i in image]
+        image = [
+            np.array(
+                i.resize(
+                    (width, height), resample=PIL_INTERPOLATION["lanczos"]
+                )
+            )
+            for i in image
+        ]
         image = [
             i[None, ..., None] if i.ndim == 2 else i[None, ...] for i in image
         ]  # expand [h, w] or [h, w, c] to [b, h, w, c]
@@ -118,7 +126,8 @@ def _preprocess_adapter_image(image, height, width):
             image = torch.cat(image, dim=0)
         else:
             raise ValueError(
-                "Invalid image tensor! Expecting image tensor with 3 or 4" f" dimension, but recive: {image[0].ndim}"
+                "Invalid image tensor! Expecting image tensor with 3 or 4"
+                f" dimension, but recive: {image[0].ndim}"
             )
     return image
 
@@ -129,12 +138,17 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     Rescale `noise_cfg` according to `guidance_rescale`. Based on findings of [Common Diffusion Noise Schedules and
     Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf). See Section 3.4
     """
-    std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
+    std_text = noise_pred_text.std(
+        dim=list(range(1, noise_pred_text.ndim)), keepdim=True
+    )
     std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
     # rescale the results from guidance (fixes overexposure)
     noise_pred_rescaled = noise_cfg * (std_text / std_cfg)
     # mix with the original results from guidance by factor guidance_rescale to avoid "plain looking" images
-    noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
+    noise_cfg = (
+        guidance_rescale * noise_pred_rescaled
+        + (1 - guidance_rescale) * noise_cfg
+    )
     return noise_cfg
 
 
@@ -209,9 +223,15 @@ class StableDiffusionXLAdapterPipeline(
             adapter=adapter,
             scheduler=scheduler,
         )
-        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+        self.register_to_config(
+            force_zeros_for_empty_prompt=force_zeros_for_empty_prompt
+        )
+        self.vae_scale_factor = 2 ** (
+            len(self.vae.config.block_out_channels) - 1
+        )
+        self.image_processor = VaeImageProcessor(
+            vae_scale_factor=self.vae_scale_factor
+        )
         self.default_sample_size = self.unet.config.sample_size
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.enable_vae_slicing
@@ -253,7 +273,7 @@ class StableDiffusionXLAdapterPipeline(
         prompt: str,
         prompt_2: Optional[str] = None,
         device: Optional[torch.device] = None,
-        cfg_end: Optional[int] = None,
+        cfg_end: Optional[float] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[str] = None,
@@ -312,19 +332,25 @@ class StableDiffusionXLAdapterPipeline(
 
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
-        if lora_scale is not None and isinstance(self, StableDiffusionXLLoraLoaderMixin):
+        if lora_scale is not None and isinstance(
+            self, StableDiffusionXLLoraLoaderMixin
+        ):
             self._lora_scale = lora_scale
 
             # dynamically adjust the LoRA scale
             if self.text_encoder is not None:
                 if not USE_PEFT_BACKEND:
-                    adjust_lora_scale_text_encoder(self.text_encoder, lora_scale)
+                    adjust_lora_scale_text_encoder(
+                        self.text_encoder, lora_scale
+                    )
                 else:
                     scale_lora_layers(self.text_encoder, lora_scale)
 
             if self.text_encoder_2 is not None:
                 if not USE_PEFT_BACKEND:
-                    adjust_lora_scale_text_encoder(self.text_encoder_2, lora_scale)
+                    adjust_lora_scale_text_encoder(
+                        self.text_encoder_2, lora_scale
+                    )
                 else:
                     scale_lora_layers(self.text_encoder_2, lora_scale)
 
@@ -336,9 +362,15 @@ class StableDiffusionXLAdapterPipeline(
             batch_size = prompt_embeds.shape[0]
 
         # Define tokenizers and text encoders
-        tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [self.tokenizer_2]
+        tokenizers = (
+            [self.tokenizer, self.tokenizer_2]
+            if self.tokenizer is not None
+            else [self.tokenizer_2]
+        )
         text_encoders = (
-            [self.text_encoder, self.text_encoder_2] if self.text_encoder is not None else [self.text_encoder_2]
+            [self.text_encoder, self.text_encoder_2]
+            if self.text_encoder is not None
+            else [self.text_encoder_2]
         )
 
         if prompt_embeds is None:
@@ -348,7 +380,9 @@ class StableDiffusionXLAdapterPipeline(
             # textual inversion: procecss multi-vector tokens if necessary
             prompt_embeds_list = []
             prompts = [prompt, prompt_2]
-            for prompt, tokenizer, text_encoder in zip(prompts, tokenizers, text_encoders):
+            for prompt, tokenizer, text_encoder in zip(
+                prompts, tokenizers, text_encoders
+            ):
                 if isinstance(self, TextualInversionLoaderMixin):
                     prompt = self.maybe_convert_prompt(prompt, tokenizer)
 
@@ -361,19 +395,25 @@ class StableDiffusionXLAdapterPipeline(
                 )
 
                 text_input_ids = text_inputs.input_ids
-                untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
+                untruncated_ids = tokenizer(
+                    prompt, padding="longest", return_tensors="pt"
+                ).input_ids
 
-                if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
-                    text_input_ids, untruncated_ids
-                ):
-                    removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1 : -1])
+                if untruncated_ids.shape[-1] >= text_input_ids.shape[
+                    -1
+                ] and not torch.equal(text_input_ids, untruncated_ids):
+                    removed_text = tokenizer.batch_decode(
+                        untruncated_ids[:, tokenizer.model_max_length - 1 : -1]
+                    )
                     logger.warning(
                         "The following part of your input was truncated"
                         " because CLIP can only handle sequences up to"
                         f" {tokenizer.model_max_length} tokens: {removed_text}"
                     )
 
-                prompt_embeds = text_encoder(text_input_ids.to(device), output_hidden_states=True)
+                prompt_embeds = text_encoder(
+                    text_input_ids.to(device), output_hidden_states=True
+                )
 
                 # We are only ALWAYS interested in the pooled output of the final text encoder
                 pooled_prompt_embeds = prompt_embeds[0]
@@ -381,29 +421,48 @@ class StableDiffusionXLAdapterPipeline(
                     prompt_embeds = prompt_embeds.hidden_states[-2]
                 else:
                     # "2" because SDXL always indexes from the penultimate layer.
-                    prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 2)]
+                    prompt_embeds = prompt_embeds.hidden_states[
+                        -(clip_skip + 2)
+                    ]
 
                 prompt_embeds_list.append(prompt_embeds)
 
             prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
 
         # get unconditional embeddings for classifier free guidance
-        zero_out_negative_prompt = negative_prompt is None and self.config.force_zeros_for_empty_prompt
-        if do_classifier_free_guidance and negative_prompt_embeds is None and zero_out_negative_prompt:
+        zero_out_negative_prompt = (
+            negative_prompt is None
+            and self.config.force_zeros_for_empty_prompt
+        )
+        if (
+            do_classifier_free_guidance
+            and negative_prompt_embeds is None
+            and zero_out_negative_prompt
+        ):
             negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-            negative_pooled_prompt_embeds = torch.zeros_like(pooled_prompt_embeds)
+            negative_pooled_prompt_embeds = torch.zeros_like(
+                pooled_prompt_embeds
+            )
         elif do_classifier_free_guidance and negative_prompt_embeds is None:
             negative_prompt = negative_prompt or ""
             negative_prompt_2 = negative_prompt_2 or negative_prompt
 
             # normalize str to list
-            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            negative_prompt = (
+                batch_size * [negative_prompt]
+                if isinstance(negative_prompt, str)
+                else negative_prompt
+            )
             negative_prompt_2 = (
-                batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+                batch_size * [negative_prompt_2]
+                if isinstance(negative_prompt_2, str)
+                else negative_prompt_2
             )
 
             uncond_tokens: List[str]
-            if prompt is not None and type(prompt) is not type(negative_prompt):
+            if prompt is not None and type(prompt) is not type(
+                negative_prompt
+            ):
                 raise TypeError(
                     "`negative_prompt` should be the same type to `prompt`,"
                     f" but got {type(negative_prompt)} != {type(prompt)}."
@@ -419,9 +478,13 @@ class StableDiffusionXLAdapterPipeline(
                 uncond_tokens = [negative_prompt, negative_prompt_2]
 
             negative_prompt_embeds_list = []
-            for negative_prompt, tokenizer, text_encoder in zip(uncond_tokens, tokenizers, text_encoders):
+            for negative_prompt, tokenizer, text_encoder in zip(
+                uncond_tokens, tokenizers, text_encoders
+            ):
                 if isinstance(self, TextualInversionLoaderMixin):
-                    negative_prompt = self.maybe_convert_prompt(negative_prompt, tokenizer)
+                    negative_prompt = self.maybe_convert_prompt(
+                        negative_prompt, tokenizer
+                    )
 
                 max_length = prompt_embeds.shape[1]
                 uncond_input = tokenizer(
@@ -438,49 +501,75 @@ class StableDiffusionXLAdapterPipeline(
                 )
                 # We are only ALWAYS interested in the pooled output of the final text encoder
                 negative_pooled_prompt_embeds = negative_prompt_embeds[0]
-                negative_prompt_embeds = negative_prompt_embeds.hidden_states[-2]
+                negative_prompt_embeds = negative_prompt_embeds.hidden_states[
+                    -2
+                ]
 
                 negative_prompt_embeds_list.append(negative_prompt_embeds)
 
-            negative_prompt_embeds = torch.concat(negative_prompt_embeds_list, dim=-1)
+            negative_prompt_embeds = torch.concat(
+                negative_prompt_embeds_list, dim=-1
+            )
 
         if self.text_encoder_2 is not None:
-            prompt_embeds = prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
+            prompt_embeds = prompt_embeds.to(
+                dtype=self.text_encoder_2.dtype, device=device
+            )
         else:
-            prompt_embeds = prompt_embeds.to(dtype=self.unet.dtype, device=device)
+            prompt_embeds = prompt_embeds.to(
+                dtype=self.unet.dtype, device=device
+            )
 
         bs_embed, seq_len, _ = prompt_embeds.shape
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+        prompt_embeds = prompt_embeds.view(
+            bs_embed * num_images_per_prompt, seq_len, -1
+        )
 
         if do_classifier_free_guidance:
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
             seq_len = negative_prompt_embeds.shape[1]
 
             if self.text_encoder_2 is not None:
-                negative_prompt_embeds = negative_prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
+                negative_prompt_embeds = negative_prompt_embeds.to(
+                    dtype=self.text_encoder_2.dtype, device=device
+                )
             else:
-                negative_prompt_embeds = negative_prompt_embeds.to(dtype=self.unet.dtype, device=device)
+                negative_prompt_embeds = negative_prompt_embeds.to(
+                    dtype=self.unet.dtype, device=device
+                )
 
-            negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
-            negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+            negative_prompt_embeds = negative_prompt_embeds.repeat(
+                1, num_images_per_prompt, 1
+            )
+            negative_prompt_embeds = negative_prompt_embeds.view(
+                batch_size * num_images_per_prompt, seq_len, -1
+            )
 
-        pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
-            bs_embed * num_images_per_prompt, -1
-        )
+        pooled_prompt_embeds = pooled_prompt_embeds.repeat(
+            1, num_images_per_prompt
+        ).view(bs_embed * num_images_per_prompt, -1)
         if do_classifier_free_guidance:
-            negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
-                bs_embed * num_images_per_prompt, -1
+            negative_pooled_prompt_embeds = (
+                negative_pooled_prompt_embeds.repeat(
+                    1, num_images_per_prompt
+                ).view(bs_embed * num_images_per_prompt, -1)
             )
 
         if self.text_encoder is not None:
-            if isinstance(self, StableDiffusionXLLoraLoaderMixin) and USE_PEFT_BACKEND:
+            if (
+                isinstance(self, StableDiffusionXLLoraLoaderMixin)
+                and USE_PEFT_BACKEND
+            ):
                 # Retrieve the original scale by scaling back the LoRA layers
                 unscale_lora_layers(self.text_encoder, lora_scale)
 
         if self.text_encoder_2 is not None:
-            if isinstance(self, StableDiffusionXLLoraLoaderMixin) and USE_PEFT_BACKEND:
+            if (
+                isinstance(self, StableDiffusionXLLoraLoaderMixin)
+                and USE_PEFT_BACKEND
+            ):
                 # Retrieve the original scale by scaling back the LoRA layers
                 unscale_lora_layers(self.text_encoder_2, lora_scale)
 
@@ -498,13 +587,17 @@ class StableDiffusionXLAdapterPipeline(
         # eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
         # and should be between [0, 1]
 
-        accepts_eta = "eta" in set(inspect.signature(self.scheduler.step).parameters.keys())
+        accepts_eta = "eta" in set(
+            inspect.signature(self.scheduler.step).parameters.keys()
+        )
         extra_step_kwargs = {}
         if accepts_eta:
             extra_step_kwargs["eta"] = eta
 
         # check if the scheduler accepts generator
-        accepts_generator = "generator" in set(inspect.signature(self.scheduler.step).parameters.keys())
+        accepts_generator = "generator" in set(
+            inspect.signature(self.scheduler.step).parameters.keys()
+        )
         if accepts_generator:
             extra_step_kwargs["generator"] = generator
         return extra_step_kwargs
@@ -526,16 +619,22 @@ class StableDiffusionXLAdapterPipeline(
         callback_on_step_end_tensor_inputs=None,
     ):
         if height % 8 != 0 or width % 8 != 0:
-            raise ValueError("`height` and `width` have to be divisible by 8 but are" f" {height} and {width}.")
+            raise ValueError(
+                "`height` and `width` have to be divisible by 8 but are"
+                f" {height} and {width}."
+            )
 
-        if callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0):
+        if callback_steps is not None and (
+            not isinstance(callback_steps, int) or callback_steps <= 0
+        ):
             raise ValueError(
                 "`callback_steps` has to be a positive integer but is"
                 f" {callback_steps} of type {type(callback_steps)}."
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
-            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
+            k in self._callback_tensor_inputs
+            for k in callback_on_step_end_tensor_inputs
         ):
             raise ValueError(
                 "`callback_on_step_end_tensor_inputs` has to be in"
@@ -560,10 +659,20 @@ class StableDiffusionXLAdapterPipeline(
                 "Provide either `prompt` or `prompt_embeds`. Cannot leave both"
                 " `prompt` and `prompt_embeds` undefined."
             )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError("`prompt` has to be of type `str` or `list` but is" f" {type(prompt)}")
-        elif prompt_2 is not None and (not isinstance(prompt_2, str) and not isinstance(prompt_2, list)):
-            raise ValueError("`prompt_2` has to be of type `str` or `list` but is" f" {type(prompt_2)}")
+        elif prompt is not None and (
+            not isinstance(prompt, str) and not isinstance(prompt, list)
+        ):
+            raise ValueError(
+                "`prompt` has to be of type `str` or `list` but is"
+                f" {type(prompt)}"
+            )
+        elif prompt_2 is not None and (
+            not isinstance(prompt_2, str) and not isinstance(prompt_2, list)
+        ):
+            raise ValueError(
+                "`prompt_2` has to be of type `str` or `list` but is"
+                f" {type(prompt_2)}"
+            )
 
         if negative_prompt is not None and negative_prompt_embeds is not None:
             raise ValueError(
@@ -571,7 +680,10 @@ class StableDiffusionXLAdapterPipeline(
                 f" `negative_prompt_embeds`: {negative_prompt_embeds}. Please"
                 " make sure to only forward one of the two."
             )
-        elif negative_prompt_2 is not None and negative_prompt_embeds is not None:
+        elif (
+            negative_prompt_2 is not None
+            and negative_prompt_embeds is not None
+        ):
             raise ValueError(
                 "Cannot forward both `negative_prompt_2`:"
                 f" {negative_prompt_2} and `negative_prompt_embeds`:"
@@ -597,7 +709,10 @@ class StableDiffusionXLAdapterPipeline(
                 " used to generate `prompt_embeds`."
             )
 
-        if negative_prompt_embeds is not None and negative_pooled_prompt_embeds is None:
+        if (
+            negative_prompt_embeds is not None
+            and negative_pooled_prompt_embeds is None
+        ):
             raise ValueError(
                 "If `negative_prompt_embeds` are provided,"
                 " `negative_pooled_prompt_embeds` also have to be passed. Make"
@@ -607,16 +722,35 @@ class StableDiffusionXLAdapterPipeline(
             )
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
-    def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
-        shape = (batch_size, num_channels_latents, height // self.vae_scale_factor, width // self.vae_scale_factor)
+    def prepare_latents(
+        self,
+        batch_size,
+        num_channels_latents,
+        height,
+        width,
+        dtype,
+        device,
+        generator,
+        latents=None,
+    ):
+        shape = (
+            batch_size,
+            num_channels_latents,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
+        )
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                "You have passed a list of generators of length"
+                f" {len(generator)}, but requested an effective batch size of"
+                f" {batch_size}. Make sure the batch size matches the length"
+                " of the generators."
             )
 
         if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            latents = randn_tensor(
+                shape, generator=generator, device=device, dtype=dtype
+            )
         else:
             latents = latents.to(device)
 
@@ -633,10 +767,13 @@ class StableDiffusionXLAdapterPipeline(
         dtype,
         text_encoder_projection_dim=None,
     ):
-        add_time_ids = list(original_size + crops_coords_top_left + target_size)
+        add_time_ids = list(
+            original_size + crops_coords_top_left + target_size
+        )
 
         passed_add_embed_dim = (
-            self.unet.config.addition_time_embed_dim * len(add_time_ids) + text_encoder_projection_dim
+            self.unet.config.addition_time_embed_dim * len(add_time_ids)
+            + text_encoder_projection_dim
         )
         expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
 
@@ -688,7 +825,9 @@ class StableDiffusionXLAdapterPipeline(
                 height = image.shape[-2]
 
             # round down to nearest multiple of `self.adapter.downscale_factor`
-            height = (height // self.adapter.downscale_factor) * self.adapter.downscale_factor
+            height = (
+                height // self.adapter.downscale_factor
+            ) * self.adapter.downscale_factor
 
         if width is None:
             if isinstance(image, PIL.Image.Image):
@@ -697,7 +836,9 @@ class StableDiffusionXLAdapterPipeline(
                 width = image.shape[-1]
 
             # round down to nearest multiple of `self.adapter.downscale_factor`
-            width = (width // self.adapter.downscale_factor) * self.adapter.downscale_factor
+            width = (
+                width // self.adapter.downscale_factor
+            ) * self.adapter.downscale_factor
 
         return height, width
 
@@ -735,7 +876,9 @@ class StableDiffusionXLAdapterPipeline(
         self,
         prompt: Union[str, List[str]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
-        image: Union[torch.Tensor, PIL.Image.Image, List[PIL.Image.Image]] = None,
+        image: Union[
+            torch.Tensor, PIL.Image.Image, List[PIL.Image.Image]
+        ] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 50,
@@ -745,7 +888,9 @@ class StableDiffusionXLAdapterPipeline(
         negative_prompt_2: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        generator: Optional[
+            Union[torch.Generator, List[torch.Generator]]
+        ] = None,
         latents: Optional[torch.FloatTensor] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
@@ -753,7 +898,9 @@ class StableDiffusionXLAdapterPipeline(
         negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
-        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
+        callback: Optional[
+            Callable[[int, int, torch.FloatTensor], None]
+        ] = None,
         callback_steps: int = 1,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         guidance_rescale: float = 0.0,
@@ -918,11 +1065,15 @@ class StableDiffusionXLAdapterPipeline(
 
             for one_image in image:
                 one_image = _preprocess_adapter_image(one_image, height, width)
-                one_image = one_image.to(device=device, dtype=self.adapter.dtype)
+                one_image = one_image.to(
+                    device=device, dtype=self.adapter.dtype
+                )
                 adapter_input.append(one_image)
         else:
             adapter_input = _preprocess_adapter_image(image, height, width)
-            adapter_input = adapter_input.to(device=device, dtype=self.adapter.dtype)
+            adapter_input = adapter_input.to(
+                device=device, dtype=self.adapter.dtype
+            )
         original_size = original_size or (height, width)
         target_size = target_size or (height, width)
 
@@ -1000,7 +1151,9 @@ class StableDiffusionXLAdapterPipeline(
 
         # 7. Prepare added time ids & embeddings & adapter features
         if isinstance(self.adapter, MultiAdapter):
-            adapter_state = self.adapter(adapter_input, adapter_conditioning_scale)
+            adapter_state = self.adapter(
+                adapter_input, adapter_conditioning_scale
+            )
             for k, v in enumerate(adapter_state):
                 adapter_state[k] = v
         else:
@@ -1018,7 +1171,9 @@ class StableDiffusionXLAdapterPipeline(
         if self.text_encoder_2 is None:
             text_encoder_projection_dim = int(pooled_prompt_embeds.shape[-1])
         else:
-            text_encoder_projection_dim = self.text_encoder_2.config.projection_dim
+            text_encoder_projection_dim = (
+                self.text_encoder_2.config.projection_dim
+            )
 
         add_time_ids = self._get_add_time_ids(
             original_size,
@@ -1027,7 +1182,10 @@ class StableDiffusionXLAdapterPipeline(
             dtype=prompt_embeds.dtype,
             text_encoder_projection_dim=text_encoder_projection_dim,
         )
-        if negative_original_size is not None and negative_target_size is not None:
+        if (
+            negative_original_size is not None
+            and negative_target_size is not None
+        ):
             negative_add_time_ids = self._get_add_time_ids(
                 negative_original_size,
                 negative_crops_coords_top_left,
@@ -1039,34 +1197,64 @@ class StableDiffusionXLAdapterPipeline(
             negative_add_time_ids = add_time_ids
 
         if do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
-            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
+            prompt_embeds = torch.cat(
+                [negative_prompt_embeds, prompt_embeds], dim=0
+            )
+            add_text_embeds = torch.cat(
+                [negative_pooled_prompt_embeds, add_text_embeds], dim=0
+            )
+            add_time_ids = torch.cat(
+                [negative_add_time_ids, add_time_ids], dim=0
+            )
 
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
-        add_time_ids = add_time_ids.to(device).repeat(batch_size * num_images_per_prompt, 1)
+        add_time_ids = add_time_ids.to(device).repeat(
+            batch_size * num_images_per_prompt, 1
+        )
 
         # 8. Denoising loop
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        num_warmup_steps = max(
+            len(timesteps) - num_inference_steps * self.scheduler.order, 0
+        )
 
         # 7.1 Apply denoising_end
-        if denoising_end is not None and isinstance(denoising_end, float) and denoising_end > 0 and denoising_end < 1:
+        if (
+            denoising_end is not None
+            and isinstance(denoising_end, float)
+            and denoising_end > 0
+            and denoising_end < 1
+        ):
             discrete_timestep_cutoff = int(
                 round(
                     self.scheduler.config.num_train_timesteps
-                    - (denoising_end * self.scheduler.config.num_train_timesteps)
+                    - (
+                        denoising_end
+                        * self.scheduler.config.num_train_timesteps
+                    )
                 )
             )
-            num_inference_steps = len(list(filter(lambda ts: ts >= discrete_timestep_cutoff, timesteps)))
+            num_inference_steps = len(
+                list(
+                    filter(
+                        lambda ts: ts >= discrete_timestep_cutoff, timesteps
+                    )
+                )
+            )
             timesteps = timesteps[:num_inference_steps]
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                latent_model_input = (
+                    torch.cat([latents] * 2)
+                    if do_classifier_free_guidance
+                    else latents
+                )
 
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                latent_model_input = self.scheduler.scale_model_input(
+                    latent_model_input, t
+                )
 
                 # predict the noise residual
                 added_cond_kwargs = {
@@ -1075,7 +1263,9 @@ class StableDiffusionXLAdapterPipeline(
                 }
 
                 if i < int(num_inference_steps * adapter_conditioning_factor):
-                    down_intrablock_additional_residuals = [state.clone() for state in adapter_state]
+                    down_intrablock_additional_residuals = [
+                        state.clone() for state in adapter_state
+                    ]
                 else:
                     down_intrablock_additional_residuals = None
 
@@ -1092,7 +1282,9 @@ class StableDiffusionXLAdapterPipeline(
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
+                    )
 
                 if do_classifier_free_guidance and guidance_rescale > 0.0:
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
@@ -1112,7 +1304,10 @@ class StableDiffusionXLAdapterPipeline(
                 )[0]
 
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps
+                    and (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
@@ -1120,13 +1315,20 @@ class StableDiffusionXLAdapterPipeline(
 
         if not output_type == "latent":
             # make sure the VAE is in float32 mode, as it overflows in float16
-            needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
+            needs_upcasting = (
+                self.vae.dtype == torch.float16
+                and self.vae.config.force_upcast
+            )
 
             if needs_upcasting:
                 self.upcast_vae()
-                latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
+                latents = latents.to(
+                    next(iter(self.vae.post_quant_conv.parameters())).dtype
+                )
 
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+            image = self.vae.decode(
+                latents / self.vae.config.scaling_factor, return_dict=False
+            )[0]
 
             # cast back to fp16 if needed
             if needs_upcasting:
@@ -1135,7 +1337,9 @@ class StableDiffusionXLAdapterPipeline(
             image = latents
             return StableDiffusionXLPipelineOutput(images=image)
 
-        image = self.image_processor.postprocess(image, output_type=output_type)
+        image = self.image_processor.postprocess(
+            image, output_type=output_type
+        )
 
         # Offload all models
         self.maybe_free_model_hooks()

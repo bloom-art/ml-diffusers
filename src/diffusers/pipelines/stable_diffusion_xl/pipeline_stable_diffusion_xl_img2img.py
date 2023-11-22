@@ -15,8 +15,9 @@
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import PIL.Image
 import torch
+
+import PIL.Image
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
 from ...image_processor import PipelineImageInput, VaeImageProcessor
@@ -240,7 +241,7 @@ class StableDiffusionXLImg2ImgPipeline(
         prompt: str,
         prompt_2: Optional[str] = None,
         device: Optional[torch.device] = None,
-        cfg_end: Optional[int] = None,
+        cfg_end: Optional[float] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[str] = None,
