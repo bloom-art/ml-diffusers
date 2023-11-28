@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 
 from transformers import (
+    CLIPImageProcessor,
     CLIPTextModel,
     CLIPTextModelWithProjection,
     CLIPTokenizer,
@@ -50,6 +51,7 @@ from ...utils import (
 )
 from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline
+from ..stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from .pipeline_output import StableDiffusionXLPipelineOutput
 
 
@@ -145,6 +147,8 @@ class StableDiffusionXLPipeline(
         scheduler ([`SchedulerMixin`]):
             A scheduler to be used in combination with `unet` to denoise the encoded image latents. Can be one of
             [`DDIMScheduler`], [`LMSDiscreteScheduler`], or [`PNDMScheduler`].
+        safety_checker ([`StableDiffusionSafetyChecker`]):
+            Classification module that estimates whether generated images could be considered offensive or harmful.
         force_zeros_for_empty_prompt (`bool`, *optional*, defaults to `"True"`):
             Whether the negative prompt embeddings shall be forced to always be set to 0. Also see the config of
             `stabilityai/stable-diffusion-xl-base-1-0`.
@@ -152,9 +156,12 @@ class StableDiffusionXLPipeline(
             Whether to use the [invisible_watermark library](https://github.com/ShieldMnt/invisible-watermark/) to
             watermark output images. If not defined, it will default to True if the package is installed, otherwise no
             watermarker will be used.
+        feature_extractor ([`~transformers.CLIPImageProcessor`]):
+            A `CLIPImageProcessor` to extract features from generated images; used as inputs to the `safety_checker`.
     """
     model_cpu_offload_seq = "text_encoder->text_encoder_2->unet->vae"
     _optional_components = [
+        "safety_checker",
         "tokenizer",
         "tokenizer_2",
         "text_encoder",
@@ -179,10 +186,20 @@ class StableDiffusionXLPipeline(
         tokenizer_2: CLIPTokenizer,
         unet: UNet2DConditionModel,
         scheduler: KarrasDiffusionSchedulers,
+        safety_checker: StableDiffusionSafetyChecker,
+        feature_extractor: CLIPImageProcessor,
         force_zeros_for_empty_prompt: bool = True,
         add_watermarker: Optional[bool] = None,
     ):
         super().__init__()
+
+        if safety_checker is not None and feature_extractor is None:
+            raise ValueError(
+                "Make sure to define a feature extractor when loading"
+                " {self.__class__} if you want to use the safety checker. If"
+                " you do not want to use the safety checker, you can pass"
+                " `'safety_checker=None'` instead."
+            )
 
         self.register_modules(
             vae=vae,
@@ -192,6 +209,8 @@ class StableDiffusionXLPipeline(
             tokenizer_2=tokenizer_2,
             unet=unet,
             scheduler=scheduler,
+            safety_checker=safety_checker,
+            feature_extractor=feature_extractor,
         )
         self.register_to_config(
             force_zeros_for_empty_prompt=force_zeros_for_empty_prompt
@@ -560,6 +579,27 @@ class StableDiffusionXLPipeline(
             pooled_prompt_embeds,
             negative_pooled_prompt_embeds,
         )
+
+    def run_safety_checker(self, image, device, dtype):
+        if self.safety_checker is None:
+            has_nsfw_concept = None
+        else:
+            if torch.is_tensor(image):
+                feature_extractor_input = self.image_processor.postprocess(
+                    image, output_type="pil"
+                )
+            else:
+                feature_extractor_input = self.image_processor.numpy_to_pil(
+                    image
+                )
+            safety_checker_input = self.feature_extractor(
+                feature_extractor_input, return_tensors="pt"
+            ).to(device)
+            image, has_nsfw_concept = self.safety_checker(
+                images=image,
+                clip_input=safety_checker_input.pixel_values.to(dtype),
+            )
+        return image, has_nsfw_concept
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -1381,12 +1421,20 @@ class StableDiffusionXLPipeline(
             image = self.vae.decode(
                 latents / self.vae.config.scaling_factor, return_dict=False
             )[0]
-
+            image, has_nsfw_concept = self.run_safety_checker(
+                image, device, prompt_embeds.dtype
+            )
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
         else:
             image = latents
+            has_nsfw_concept = None
+
+        if has_nsfw_concept is None:
+            do_denormalize = [True] * image.shape[0]
+        else:
+            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
         if not output_type == "latent":
             # apply watermark if available
@@ -1394,13 +1442,15 @@ class StableDiffusionXLPipeline(
                 image = self.watermark.apply_watermark(image)
 
             image = self.image_processor.postprocess(
-                image, output_type=output_type
+                image, output_type=output_type, do_denormalize=do_denormalize
             )
 
         # Offload all models
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image,)
+            return (image, has_nsfw_concept)
 
-        return StableDiffusionXLPipelineOutput(images=image)
+        return StableDiffusionXLPipelineOutput(
+            images=image, nsfw_content_detected=has_nsfw_concept
+        )

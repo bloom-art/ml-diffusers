@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import List, Union
+from typing import List, Optional, Union
 
 import numpy as np
+
 import PIL.Image
 
 from ...utils import BaseOutput, is_flax_available
@@ -19,6 +20,7 @@ class StableDiffusionXLPipelineOutput(BaseOutput):
     """
 
     images: Union[List[PIL.Image.Image], np.ndarray]
+    nsfw_content_detected: Optional[List[bool]]
 
 
 if is_flax_available():
