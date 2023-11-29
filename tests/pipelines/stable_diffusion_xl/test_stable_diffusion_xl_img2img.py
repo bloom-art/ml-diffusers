@@ -125,6 +125,8 @@ class StableDiffusionXLImg2ImgPipelineFastTests(PipelineLatentTesterMixin, Pipel
             "text_encoder_2": text_encoder_2,
             "tokenizer_2": tokenizer_2,
             "requires_aesthetics_score": True,
+            "safety_checker": None,
+            "feature_extractor": None,
         }
         return components
 
@@ -160,6 +162,7 @@ class StableDiffusionXLImg2ImgPipelineFastTests(PipelineLatentTesterMixin, Pipel
     def test_stable_diffusion_xl_img2img_euler(self):
         device = "cpu"  # ensure determinism for the device-dependent torch.Generator
         components = self.get_dummy_components()
+        print("HIIII", components)
         sd_pipe = StableDiffusionXLImg2ImgPipeline(**components)
         sd_pipe = sd_pipe.to(device)
         sd_pipe.set_progress_bar_config(disable=None)
@@ -458,6 +461,8 @@ class StableDiffusionXLImg2ImgRefinerOnlyPipelineFastTests(
             "text_encoder_2": text_encoder_2,
             "tokenizer_2": tokenizer_2,
             "requires_aesthetics_score": True,
+            "safety_checker": None,
+            "feature_extractor": None,
         }
         return components
 
