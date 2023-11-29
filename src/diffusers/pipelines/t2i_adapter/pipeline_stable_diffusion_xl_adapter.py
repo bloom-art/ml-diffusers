@@ -624,10 +624,6 @@ class StableDiffusionXLAdapterPipeline(
         latents = latents * self.scheduler.init_noise_sigma
         return latents
 
-        # scale the initial noise by the standard deviation required by the scheduler
-        latents = latents * self.scheduler.init_noise_sigma
-        return latents
-
     # Copied from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl.StableDiffusionXLPipeline._get_add_time_ids
     def _get_add_time_ids(
         self,
