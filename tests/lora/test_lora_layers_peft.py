@@ -49,7 +49,7 @@ from diffusers.utils.testing_utils import (
     require_peft_backend,
     require_torch_gpu,
     slow,
-    torch_device,f
+    torch_device,
 )
 
 

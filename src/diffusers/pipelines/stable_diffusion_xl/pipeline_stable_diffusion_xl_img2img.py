@@ -15,13 +15,21 @@
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import torch
-
 import PIL.Image
-from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
+import torch
+from transformers import (
+    CLIPImageProcessor,
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    CLIPTokenizer,
+)
 
 from ...image_processor import PipelineImageInput, VaeImageProcessor
-from ...loaders import FromSingleFileMixin, StableDiffusionXLLoraLoaderMixin, TextualInversionLoaderMixin
+from ...loaders import (
+    FromSingleFileMixin,
+    StableDiffusionXLLoraLoaderMixin,
+    TextualInversionLoaderMixin,
+)
 from ...models import AutoencoderKL, UNet2DConditionModel
 from ...models.attention_processor import (
     AttnProcessor2_0,
@@ -43,7 +51,8 @@ from ...utils import (
 )
 from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline
-from .pipeline_output import StableDiffusionXLPipelineOutput
+from ..stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+from .pipeline_output import CustomStableDiffusionXLPipelineOutput
 
 
 if is_invisible_watermark_available():
@@ -105,7 +114,10 @@ def retrieve_latents(encoder_output, generator):
 
 
 class StableDiffusionXLImg2ImgPipeline(
-    DiffusionPipeline, TextualInversionLoaderMixin, FromSingleFileMixin, StableDiffusionXLLoraLoaderMixin
+    DiffusionPipeline,
+    TextualInversionLoaderMixin,
+    FromSingleFileMixin,
+    StableDiffusionXLLoraLoaderMixin,
 ):
     r"""
     Pipeline for text-to-image generation using Stable Diffusion XL.
@@ -152,10 +164,18 @@ class StableDiffusionXLImg2ImgPipeline(
         add_watermarker (`bool`, *optional*):
             Whether to use the [invisible_watermark library](https://github.com/ShieldMnt/invisible-watermark/) to
             watermark output images. If not defined, it will default to True if the package is installed, otherwise no
-            watermarker will be used.
+            watermarker will be used. feature_extractor ([`~transformers.CLIPImageProcessor`]): A `CLIPImageProcessor`
+            to extract features from generated images; used as inputs to the `safety_checker`.
     """
     model_cpu_offload_seq = "text_encoder->text_encoder_2->unet->vae"
-    _optional_components = ["tokenizer", "tokenizer_2", "text_encoder", "text_encoder_2"]
+    _optional_components = [
+        "safety_checker",
+        "tokenizer",
+        "tokenizer_2",
+        "text_encoder",
+        "text_encoder_2",
+        "feature_extractor",
+    ]
     _callback_tensor_inputs = [
         "latents",
         "prompt_embeds",
@@ -175,11 +195,21 @@ class StableDiffusionXLImg2ImgPipeline(
         tokenizer_2: CLIPTokenizer,
         unet: UNet2DConditionModel,
         scheduler: KarrasDiffusionSchedulers,
+        safety_checker: StableDiffusionSafetyChecker,
+        feature_extractor: CLIPImageProcessor,
         requires_aesthetics_score: bool = False,
         force_zeros_for_empty_prompt: bool = True,
         add_watermarker: Optional[bool] = None,
     ):
         super().__init__()
+
+        if safety_checker is not None and feature_extractor is None:
+            raise ValueError(
+                "Make sure to define a feature extractor when loading"
+                " {self.__class__} if you want to use the safety checker. If"
+                " you do not want to use the safety checker, you can pass"
+                " `'safety_checker=None'` instead."
+            )
 
         self.register_modules(
             vae=vae,
@@ -189,6 +219,8 @@ class StableDiffusionXLImg2ImgPipeline(
             tokenizer_2=tokenizer_2,
             unet=unet,
             scheduler=scheduler,
+            safety_checker=safety_checker,
+            feature_extractor=feature_extractor,
         )
         self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
         self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
@@ -479,6 +511,21 @@ class StableDiffusionXLImg2ImgPipeline(
             negative_pooled_prompt_embeds,
         )
 
+    def run_safety_checker(self, image, device, dtype):
+        if self.safety_checker is None:
+            has_nsfw_concept = None
+        else:
+            if torch.is_tensor(image):
+                feature_extractor_input = self.image_processor.postprocess(image, output_type="pil")
+            else:
+                feature_extractor_input = self.image_processor.numpy_to_pil(image)
+            safety_checker_input = self.feature_extractor(feature_extractor_input, return_tensors="pt").to(device)
+            image, has_nsfw_concept = self.safety_checker(
+                images=image,
+                clip_input=safety_checker_input.pixel_values.to(dtype),
+            )
+        return image, has_nsfw_concept
+
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):
         # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
@@ -516,57 +563,67 @@ class StableDiffusionXLImg2ImgPipeline(
             raise ValueError("`num_inference_steps` cannot be None.")
         elif not isinstance(num_inference_steps, int) or num_inference_steps <= 0:
             raise ValueError(
-                f"`num_inference_steps` has to be a positive integer but is {num_inference_steps} of type"
-                f" {type(num_inference_steps)}."
+                "`num_inference_steps` has to be a positive integer but is"
+                f" {num_inference_steps} of type {type(num_inference_steps)}."
             )
         if callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0):
             raise ValueError(
-                f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
-                f" {type(callback_steps)}."
+                "`callback_steps` has to be a positive integer but is"
+                f" {callback_steps} of type {type(callback_steps)}."
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
             k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
         ):
             raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
+                "`callback_on_step_end_tensor_inputs` has to be in"
+                f" {self._callback_tensor_inputs}, but found"
+                f" {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
             )
 
         if prompt is not None and prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
+                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`:"
+                f" {prompt_embeds}. Please make sure to only forward one of"
+                " the two."
             )
         elif prompt_2 is not None and prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `prompt_2`: {prompt_2} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
+                f"Cannot forward both `prompt_2`: {prompt_2} and"
+                f" `prompt_embeds`: {prompt_embeds}. Please make sure to only"
+                " forward one of the two."
             )
         elif prompt is None and prompt_embeds is None:
             raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
+                "Provide either `prompt` or `prompt_embeds`. Cannot leave both"
+                " `prompt` and `prompt_embeds` undefined."
             )
         elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+            raise ValueError("`prompt` has to be of type `str` or `list` but is" f" {type(prompt)}")
         elif prompt_2 is not None and (not isinstance(prompt_2, str) and not isinstance(prompt_2, list)):
-            raise ValueError(f"`prompt_2` has to be of type `str` or `list` but is {type(prompt_2)}")
+            raise ValueError("`prompt_2` has to be of type `str` or `list` but is" f" {type(prompt_2)}")
 
         if negative_prompt is not None and negative_prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+                f"Cannot forward both `negative_prompt`: {negative_prompt} and"
+                f" `negative_prompt_embeds`: {negative_prompt_embeds}. Please"
+                " make sure to only forward one of the two."
             )
         elif negative_prompt_2 is not None and negative_prompt_embeds is not None:
             raise ValueError(
-                f"Cannot forward both `negative_prompt_2`: {negative_prompt_2} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+                "Cannot forward both `negative_prompt_2`:"
+                f" {negative_prompt_2} and `negative_prompt_embeds`:"
+                f" {negative_prompt_embeds}. Please make sure to only forward"
+                " one of the two."
             )
 
         if prompt_embeds is not None and negative_prompt_embeds is not None:
             if prompt_embeds.shape != negative_prompt_embeds.shape:
                 raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
+                    "`prompt_embeds` and `negative_prompt_embeds` must have"
+                    " the same shape when passed directly, but got:"
+                    f" `prompt_embeds` {prompt_embeds.shape} !="
+                    " `negative_prompt_embeds`"
                     f" {negative_prompt_embeds.shape}."
                 )
 
@@ -607,11 +664,19 @@ class StableDiffusionXLImg2ImgPipeline(
         return timesteps, num_inference_steps - t_start
 
     def prepare_latents(
-        self, image, timestep, batch_size, num_images_per_prompt, dtype, device, generator=None, add_noise=True
+        self,
+        image,
+        timestep,
+        batch_size,
+        num_images_per_prompt,
+        dtype,
+        device,
+        generator=None,
+        add_noise=True,
     ):
         if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
             raise ValueError(
-                f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
+                "`image` has to be of type `torch.Tensor`, `PIL.Image.Image`" f" or list but is {type(image)}"
             )
 
         # Offload text encoder if `enable_model_cpu_offload` was enabled
@@ -634,13 +699,18 @@ class StableDiffusionXLImg2ImgPipeline(
 
             if isinstance(generator, list) and len(generator) != batch_size:
                 raise ValueError(
-                    f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                    f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                    "You have passed a list of generators of length"
+                    f" {len(generator)}, but requested an effective batch size"
+                    f" of {batch_size}. Make sure the batch size matches the"
+                    " length of the generators."
                 )
 
             elif isinstance(generator, list):
                 init_latents = [
-                    retrieve_latents(self.vae.encode(image[i : i + 1]), generator=generator[i])
+                    retrieve_latents(
+                        self.vae.encode(image[i : i + 1]),
+                        generator=generator[i],
+                    )
                     for i in range(batch_size)
                 ]
                 init_latents = torch.cat(init_latents, dim=0)
@@ -659,7 +729,7 @@ class StableDiffusionXLImg2ImgPipeline(
             init_latents = torch.cat([init_latents] * additional_image_per_prompt, dim=0)
         elif batch_size > init_latents.shape[0] and batch_size % init_latents.shape[0] != 0:
             raise ValueError(
-                f"Cannot duplicate `image` of batch size {init_latents.shape[0]} to {batch_size} text prompts."
+                "Cannot duplicate `image` of batch size" f" {init_latents.shape[0]} to {batch_size} text prompts."
             )
         else:
             init_latents = torch.cat([init_latents], dim=0)
@@ -706,18 +776,36 @@ class StableDiffusionXLImg2ImgPipeline(
             and (expected_add_embed_dim - passed_add_embed_dim) == self.unet.config.addition_time_embed_dim
         ):
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. Please make sure to enable `requires_aesthetics_score` with `pipe.register_to_config(requires_aesthetics_score=True)` to make sure `aesthetic_score` {aesthetic_score} and `negative_aesthetic_score` {negative_aesthetic_score} is correctly used by the model."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. Please make sure to"
+                " enable `requires_aesthetics_score` with"
+                " `pipe.register_to_config(requires_aesthetics_score=True)`"
+                f" to make sure `aesthetic_score` {aesthetic_score} and"
+                f" `negative_aesthetic_score` {negative_aesthetic_score} is"
+                " correctly used by the model."
             )
         elif (
             expected_add_embed_dim < passed_add_embed_dim
             and (passed_add_embed_dim - expected_add_embed_dim) == self.unet.config.addition_time_embed_dim
         ):
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. Please make sure to disable `requires_aesthetics_score` with `pipe.register_to_config(requires_aesthetics_score=False)` to make sure `target_size` {target_size} is correctly used by the model."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. Please make sure to"
+                " disable `requires_aesthetics_score` with"
+                " `pipe.register_to_config(requires_aesthetics_score=False)`"
+                f" to make sure `target_size` {target_size} is correctly used"
+                " by the model."
             )
         elif expected_add_embed_dim != passed_add_embed_dim:
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. The model has an"
+                " incorrect config. Please check"
+                " `unet.config.time_embedding_type` and"
+                " `text_encoder_2.config.projection_dim`."
             )
 
         add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
@@ -1032,13 +1120,15 @@ class StableDiffusionXLImg2ImgPipeline(
             deprecate(
                 "callback",
                 "1.0.0",
-                "Passing `callback` as an input argument to `__call__` is deprecated, consider use `callback_on_step_end`",
+                "Passing `callback` as an input argument to `__call__` is"
+                " deprecated, consider use `callback_on_step_end`",
             )
         if callback_steps is not None:
             deprecate(
                 "callback_steps",
                 "1.0.0",
-                "Passing `callback_steps` as an input argument to `__call__` is deprecated, consider use `callback_on_step_end`",
+                "Passing `callback_steps` as an input argument to `__call__`"
+                " is deprecated, consider use `callback_on_step_end`",
             )
 
         # 1. Check inputs. Raise error if not correct
@@ -1183,8 +1273,8 @@ class StableDiffusionXLImg2ImgPipeline(
             and self.denoising_start >= self.denoising_end
         ):
             raise ValueError(
-                f"`denoising_start`: {self.denoising_start} cannot be larger than or equal to `denoising_end`: "
-                + f" {self.denoising_end} when using type float."
+                f"`denoising_start`: {self.denoising_start} cannot be larger"
+                " than or equal to `denoising_end`: " + f" {self.denoising_end} when using type float."
             )
         elif self.denoising_end is not None and denoising_value_valid(self.denoising_end):
             discrete_timestep_cutoff = int(
@@ -1201,7 +1291,8 @@ class StableDiffusionXLImg2ImgPipeline(
         if self.unet.config.time_cond_proj_dim is not None:
             guidance_scale_tensor = torch.tensor(self.guidance_scale - 1).repeat(batch_size * num_images_per_prompt)
             timestep_cond = self.get_guidance_scale_embedding(
-                guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
+                guidance_scale_tensor,
+                embedding_dim=self.unet.config.time_cond_proj_dim,
             ).to(device=device, dtype=latents.dtype)
 
         self._num_timesteps = len(timesteps)
@@ -1213,7 +1304,10 @@ class StableDiffusionXLImg2ImgPipeline(
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 # predict the noise residual
-                added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                added_cond_kwargs = {
+                    "text_embeds": add_text_embeds,
+                    "time_ids": add_time_ids,
+                }
                 noise_pred = self.unet(
                     latent_model_input,
                     t,
@@ -1231,10 +1325,20 @@ class StableDiffusionXLImg2ImgPipeline(
 
                 if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=self.guidance_rescale)
+                    noise_pred = rescale_noise_cfg(
+                        noise_pred,
+                        noise_pred_text,
+                        guidance_rescale=self.guidance_rescale,
+                    )
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                latents = self.scheduler.step(
+                    noise_pred,
+                    t,
+                    latents,
+                    **extra_step_kwargs,
+                    return_dict=False,
+                )[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -1247,7 +1351,8 @@ class StableDiffusionXLImg2ImgPipeline(
                     negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
                     add_text_embeds = callback_outputs.pop("add_text_embeds", add_text_embeds)
                     negative_pooled_prompt_embeds = callback_outputs.pop(
-                        "negative_pooled_prompt_embeds", negative_pooled_prompt_embeds
+                        "negative_pooled_prompt_embeds",
+                        negative_pooled_prompt_embeds,
                     )
                     add_time_ids = callback_outputs.pop("add_time_ids", add_time_ids)
                     add_neg_time_ids = callback_outputs.pop("add_neg_time_ids", add_neg_time_ids)
@@ -1272,23 +1377,30 @@ class StableDiffusionXLImg2ImgPipeline(
 
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
 
+            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
         else:
             image = latents
-            return StableDiffusionXLPipelineOutput(images=image)
+            has_nsfw_concept = None
 
+        if has_nsfw_concept is None:
+            do_denormalize = [True] * image.shape[0]
+        else:
+            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
         # apply watermark if available
-        if self.watermark is not None:
-            image = self.watermark.apply_watermark(image)
+        if not output_type == "latent":
+            # apply watermark if available
+            if self.watermark is not None:
+                image = self.watermark.apply_watermark(image)
 
-        image = self.image_processor.postprocess(image, output_type=output_type)
-
+            image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
         # Offload all models
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image,)
+            return (image, has_nsfw_concept)
 
-        return StableDiffusionXLPipelineOutput(images=image)
+        return CustomStableDiffusionXLPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
