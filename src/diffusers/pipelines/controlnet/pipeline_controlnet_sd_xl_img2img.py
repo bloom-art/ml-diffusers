@@ -786,11 +786,19 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
 
     # Copied from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_img2img.StableDiffusionXLImg2ImgPipeline.prepare_latents
     def prepare_latents(
-        self, image, timestep, batch_size, num_images_per_prompt, dtype, device, generator=None, add_noise=True
+        self,
+        image,
+        timestep,
+        batch_size,
+        num_images_per_prompt,
+        dtype,
+        device,
+        generator=None,
+        add_noise=True,
     ):
         if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
             raise ValueError(
-                f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
+                "`image` has to be of type `torch.Tensor`, `PIL.Image.Image`" f" or list but is {type(image)}"
             )
 
         # Offload text encoder if `enable_model_cpu_offload` was enabled
@@ -813,13 +821,18 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
 
             if isinstance(generator, list) and len(generator) != batch_size:
                 raise ValueError(
-                    f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                    f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+                    "You have passed a list of generators of length"
+                    f" {len(generator)}, but requested an effective batch size"
+                    f" of {batch_size}. Make sure the batch size matches the"
+                    " length of the generators."
                 )
 
             elif isinstance(generator, list):
                 init_latents = [
-                    retrieve_latents(self.vae.encode(image[i : i + 1]), generator=generator[i])
+                    retrieve_latents(
+                        self.vae.encode(image[i : i + 1]),
+                        generator=generator[i],
+                    )
                     for i in range(batch_size)
                 ]
                 init_latents = torch.cat(init_latents, dim=0)
@@ -838,7 +851,7 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
             init_latents = torch.cat([init_latents] * additional_image_per_prompt, dim=0)
         elif batch_size > init_latents.shape[0] and batch_size % init_latents.shape[0] != 0:
             raise ValueError(
-                f"Cannot duplicate `image` of batch size {init_latents.shape[0]} to {batch_size} text prompts."
+                "Cannot duplicate `image` of batch size" f" {init_latents.shape[0]} to {batch_size} text prompts."
             )
         else:
             init_latents = torch.cat([init_latents], dim=0)
@@ -886,18 +899,36 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
             and (expected_add_embed_dim - passed_add_embed_dim) == self.unet.config.addition_time_embed_dim
         ):
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. Please make sure to enable `requires_aesthetics_score` with `pipe.register_to_config(requires_aesthetics_score=True)` to make sure `aesthetic_score` {aesthetic_score} and `negative_aesthetic_score` {negative_aesthetic_score} is correctly used by the model."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. Please make sure to"
+                " enable `requires_aesthetics_score` with"
+                " `pipe.register_to_config(requires_aesthetics_score=True)`"
+                f" to make sure `aesthetic_score` {aesthetic_score} and"
+                f" `negative_aesthetic_score` {negative_aesthetic_score} is"
+                " correctly used by the model."
             )
         elif (
             expected_add_embed_dim < passed_add_embed_dim
             and (passed_add_embed_dim - expected_add_embed_dim) == self.unet.config.addition_time_embed_dim
         ):
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. Please make sure to disable `requires_aesthetics_score` with `pipe.register_to_config(requires_aesthetics_score=False)` to make sure `target_size` {target_size} is correctly used by the model."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. Please make sure to"
+                " disable `requires_aesthetics_score` with"
+                " `pipe.register_to_config(requires_aesthetics_score=False)`"
+                f" to make sure `target_size` {target_size} is correctly used"
+                " by the model."
             )
         elif expected_add_embed_dim != passed_add_embed_dim:
             raise ValueError(
-                f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
+                "Model expects an added time embedding vector of length"
+                f" {expected_add_embed_dim}, but a vector of"
+                f" {passed_add_embed_dim} was created. The model has an"
+                " incorrect config. Please check"
+                " `unet.config.time_embedding_type` and"
+                " `text_encoder_2.config.projection_dim`."
             )
 
         add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
