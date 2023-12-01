@@ -1409,6 +1409,8 @@ class StableDiffusionXLImg2ImgPipeline(
 
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
 
+            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
