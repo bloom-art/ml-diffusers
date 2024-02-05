@@ -24,6 +24,8 @@ from transformers import (
     CLIPVisionModelWithProjection,
 )
 
+from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+
 from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import (
     FromSingleFileMixin,
@@ -53,7 +55,7 @@ from ...utils import (
 )
 from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline
-from .pipeline_output import StableDiffusionXLPipelineOutput
+from .pipeline_output import CustomStableDiffusionXLPipelineOutput
 
 
 if is_invisible_watermark_available():
@@ -189,9 +191,13 @@ class StableDiffusionXLPipeline(
         scheduler ([`SchedulerMixin`]):
             A scheduler to be used in combination with `unet` to denoise the encoded image latents. Can be one of
             [`DDIMScheduler`], [`LMSDiscreteScheduler`], or [`PNDMScheduler`].
+        safety_checker ([`StableDiffusionSafetyChecker`]):
+            Classification module that estimates whether generated images could be considered offensive or harmful.
         force_zeros_for_empty_prompt (`bool`, *optional*, defaults to `"True"`):
             Whether the negative prompt embeddings shall be forced to always be set to 0. Also see the config of
             `stabilityai/stable-diffusion-xl-base-1-0`.
+        feature_extractor ([`~transformers.CLIPImageProcessor`]):
+            A `CLIPImageProcessor` to extract features from generated images; used as inputs to the `safety_checker`.
         add_watermarker (`bool`, *optional*):
             Whether to use the [invisible_watermark library](https://github.com/ShieldMnt/invisible-watermark/) to
             watermark output images. If not defined, it will default to True if the package is installed, otherwise no
@@ -205,6 +211,7 @@ class StableDiffusionXLPipeline(
         "text_encoder",
         "text_encoder_2",
         "image_encoder",
+        "safety_checker",
         "feature_extractor",
     ]
     _callback_tensor_inputs = [
@@ -227,6 +234,7 @@ class StableDiffusionXLPipeline(
         unet: UNet2DConditionModel,
         scheduler: KarrasDiffusionSchedulers,
         image_encoder: CLIPVisionModelWithProjection = None,
+        safety_checker: StableDiffusionSafetyChecker = None,
         feature_extractor: CLIPImageProcessor = None,
         force_zeros_for_empty_prompt: bool = True,
         add_watermarker: Optional[bool] = None,
@@ -242,6 +250,7 @@ class StableDiffusionXLPipeline(
             unet=unet,
             scheduler=scheduler,
             image_encoder=image_encoder,
+            safety_checker=safety_checker,
             feature_extractor=feature_extractor,
         )
         self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
@@ -295,6 +304,7 @@ class StableDiffusionXLPipeline(
         prompt: str,
         prompt_2: Optional[str] = None,
         device: Optional[torch.device] = None,
+        cfg_end: Optional[float] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[str] = None,
@@ -349,6 +359,7 @@ class StableDiffusionXLPipeline(
                 the output of the pre-final layer will be used for computing the prompt embeddings.
         """
         device = device or self._execution_device
+        cfg_end = cfg_end
 
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
@@ -577,6 +588,21 @@ class StableDiffusionXLPipeline(
             image_embeds.append(single_image_embeds)
 
         return image_embeds
+
+    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.run_safety_checker
+    def run_safety_checker(self, image, device, dtype):
+        if self.safety_checker is None:
+            has_nsfw_concept = None
+        else:
+            if torch.is_tensor(image):
+                feature_extractor_input = self.image_processor.postprocess(image, output_type="pil")
+            else:
+                feature_extractor_input = self.image_processor.numpy_to_pil(image)
+            safety_checker_input = self.feature_extractor(feature_extractor_input, return_tensors="pt").to(device)
+            image, has_nsfw_concept = self.safety_checker(
+                images=image, clip_input=safety_checker_input.pixel_values.to(dtype)
+            )
+        return image, has_nsfw_concept
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -866,6 +892,13 @@ class StableDiffusionXLPipeline(
     def do_classifier_free_guidance(self):
         return self._guidance_scale > 1 and self.unet.config.time_cond_proj_dim is None
 
+    @do_classifier_free_guidance.setter
+    def do_classifier_free_guidance(self, value):
+        if value:
+            self._guidance_scale = 5.0
+        else:
+            self._guidance_scale = 1.0
+
     @property
     def cross_attention_kwargs(self):
         return self._cross_attention_kwargs
@@ -894,6 +927,7 @@ class StableDiffusionXLPipeline(
         timesteps: List[int] = None,
         denoising_end: Optional[float] = None,
         guidance_scale: float = 5.0,
+        cfg_end: Optional[float] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_2: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
@@ -1128,6 +1162,7 @@ class StableDiffusionXLPipeline(
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
+            cfg_end=cfg_end,
             negative_prompt=negative_prompt,
             negative_prompt_2=negative_prompt_2,
             prompt_embeds=prompt_embeds,
@@ -1229,6 +1264,11 @@ class StableDiffusionXLPipeline(
                 if self.interrupt:
                     continue
 
+                if cfg_end is not None and i / num_inference_steps > cfg_end and self.do_classifier_free_guidance:
+                    self.do_classifier_free_guidance = False
+                    prompt_embeds = torch.chunk(prompt_embeds, 2, dim=0)[-1]
+                    add_text_embeds = torch.chunk(add_text_embeds, 2, dim=0)[-1]
+                    add_time_ids = torch.chunk(add_time_ids, 2, dim=0)[-1]
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
@@ -1296,23 +1336,31 @@ class StableDiffusionXLPipeline(
 
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
 
+            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
         else:
             image = latents
+            has_nsfw_concept = None
+
+        if has_nsfw_concept is None:
+            do_denormalize = [True] * image.shape[0]
+        else:
+            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
         if not output_type == "latent":
             # apply watermark if available
             if self.watermark is not None:
                 image = self.watermark.apply_watermark(image)
 
-            image = self.image_processor.postprocess(image, output_type=output_type)
+            image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
         # Offload all models
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image,)
+            return (image, has_nsfw_concept)
 
-        return StableDiffusionXLPipelineOutput(images=image)
+        return CustomStableDiffusionXLPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
